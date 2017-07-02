@@ -1,0 +1,2 @@
+# eth_cloudminingprofitability
+ethereum mining profitability calculator
