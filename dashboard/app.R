@@ -11,28 +11,15 @@ library(forecast)
 library(dplyr)
 library(dygraphs)
 library(jsonlite)
-
-# functions.r ?
-#
-# dygraph needs to have the data in sepecif xts format, convert forecast model to this format.  
-convertToDygraph <- function(forecast){
-  past_dates <- seq(bigbang,last(ethDaily$Day),by="days")
-  future_dates <- seq(last(ethDaily$Day)+1,last(ethDaily$Day)+forecast_days(),by="days")
-  a <- xts(forecast$x, order.by = past_dates)
-  colnames(a) <- "actuals"
-  b <- xts(forecast$lower[,2], order.by = future_dates)
-  colnames(b) <- "lower"
-  c <- xts(forecast$mean,  order.by = future_dates)
-  colnames(c) <- "mean"
-  d <- xts(forecast$upper[,2], order.by = future_dates)
-  colnames(d) <- "upper"
-  return(cbind(a,b,c,d))
-}
-
+library(xts)
 
 # the start of it all.
 bigbang <- as.Date("2015-07-30")
 
+# dev mode - RStudio
+# dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
+# ethDaily <- readRDS(paste0(dir,"/data/daily.Rda"))
+ethDaily <- readRDS("data/daily.Rda")
 
 # shiny ui
 ui <- dashboardPage(
@@ -119,13 +106,25 @@ ui <- dashboardPage(
                       )
 ))))
 
-# dev mode - RStudio
-# dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
-# ethDaily <- readRDS(paste0(dir,"/data/daily.Rda"))
-ethDaily <- readRDS("data/daily.Rda")
-
 # shiny server
 server <- function(input, output,session) { 
+  # functions.r ?
+  #
+  # dygraph needs to have the data in sepecif xts format, convert forecast model to this format.  
+  convertToDygraph <- function(forecast){
+    past_dates <- seq(bigbang,last(ethDaily$Day),by="days")
+    future_dates <- seq(last(ethDaily$Day)+1,last(ethDaily$Day)+forecast_days(),by="days")
+    a <- xts(forecast$x, order.by = past_dates)
+    colnames(a) <- "actuals"
+    b <- xts(forecast$lower[,2], order.by = future_dates)
+    colnames(b) <- "lower"
+    c <- xts(forecast$mean,  order.by = future_dates)
+    colnames(c) <- "mean"
+    d <- xts(forecast$upper[,2], order.by = future_dates)
+    colnames(d) <- "upper"
+    return(cbind(a,b,c,d))
+  }
+  
   
   # The last row is not a full day yet, exclude from forecasts.
   ethDaily <- ethDaily[1:(nrow(ethDaily)-1),]
@@ -163,6 +162,7 @@ server <- function(input, output,session) {
   })  
   
   # dev mode
+  # advanced_options <- data.frame(yes=TRUE)
   # userHashRate <- function(){return(250*1e6)}
   # investment <- function(){return(700)}
   # investment_date <- function(){return(Sys.Date())}
@@ -278,7 +278,7 @@ server <- function(input, output,session) {
     df_user <- calculateData()$df_user
     earnings_ts = xts(df_user$csdu,  order.by=df_user$date)
     colnames(earnings_ts) <- "Earnings"
-    energy_ts = xts(df_user$es,  order.by=df_user$date)
+    energy_ts = xts(df_user$ec,  order.by=df_user$date)
     colnames(energy_ts) <- "Energy"
     ts <- cbind(earnings_ts,energy_ts)
     
@@ -306,7 +306,7 @@ server <- function(input, output,session) {
     cdg <- convertToDygraph(f_nhr)
     
     dygraph(cdg, main = "Actual and predicted net hash rate") %>%
-      dySeries(name = "actuals", label = "actual") %>%
+      dySeries(name = "actuals", label = "Actual") %>%
       dySeries(c("lower","mean","upper"), label = "Predicted") %>%
       dyAxis("y", logscale = TRUE,  valueFormatter = hr_format, axisLabelFormatter = hr_format ) %>%
       dyLegend(show = "follow") %>%
@@ -317,14 +317,23 @@ server <- function(input, output,session) {
   # daily ether to miner forcast chart
   output$detmForecast <- renderDygraph({
     
-    # get forecast values
-    f_detm <- calculateData()$f_detm
-    # convert forecasted values such that dygraph can handle them
-    cdg <- convertToDygraph(f_detm)
+    # plot can take some time, show progress to user
+    withProgress(message = 'Making plot', {
+      incProgress(1/2)
+      # get forecast values
+      f_detm <- calculateData()$f_detm
+      incProgress(1/4)
+      # convert forecasted values such that dygraph can handle them
+      cdg <- convertToDygraph(f_detm)
+      incProgress(1/5)
+    })
     
     dygraph(cdg) %>%
-      dySeries(name = "actuals", label = "actual") %>%
-      dySeries(c("lower","mean","upper"), label = "Predicted")
+      dySeries(name = "actuals", label = "Actual") %>%
+      dySeries(c("lower","mean","upper"), label = "Predicted")%>%
+      dyLegend(show = "follow") %>%
+      dyAxis("x", label = "Date")  %>%
+      dyAxis("y", label = "Daily ether to miners")  
   })
 }
 
