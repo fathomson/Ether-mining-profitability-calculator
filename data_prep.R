@@ -220,12 +220,13 @@ DBI::dbExecute(dbHandle, "INSERT INTO eth_daily VALUES (?,?,?,?,?,?,?,?)", unnam
 # retrieve daily aggregations and write to file.
 query <- paste0("SELECT * FROM eth_daily ORDER BY day ASC")
 aggregatedBlocks <- dbGetQuery(dbHandle, query)
-aggregatedBlocks$day <- as.Date(aggregatedBlocks$day, origin='1970-01-01', tz='GMT')
+aggregatedBlocks$day <- as.Date(as.POSIXct(aggregatedBlocks$day, origin='1970-01-01', tz='GMT'))
 
 # RStudio filedir
 # write to dashboard dir
 dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
 saveRDS(aggregatedBlocks, paste0(dir, "/dashboard/data/daily.Rda"))
+#write.csv(aggregatedBlocks,paste0(dir, "/dashboard/data/daily.csv"))
 
 
 # clode db connection
