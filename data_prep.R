@@ -1,6 +1,6 @@
 # Ethereum cloud mining profitability calculator
 # Frank Thomson <f.a.thomson@gmail.com>
-# July 2, 2017
+# August 5, 2017
 
 #
 # R script too: 
@@ -9,14 +9,16 @@
 # 3. Retrieve custom objects from sql and aggregate per day and write this to Rda file which is used in dashboard.
 
 # json rpc api
-# cmd: geth --rpc --rpccorsdomain localhost
+# cmd: geth --rpc --rpccorsdomain localhost --cache=4096 --datadir /mnt/volume-sfa2-01/ethereum
+# cmd: geth --rpc --rpccorsdomain localhost --cache=4096 --datadir "D:/Ethereum"
 
 # load libs
-library(RODBC)
-library(RODBCext)
+library(RSQLite)
 library(dplyr)
+library(bit64) # to save large ints in sqlitedb
 
 
+# system("geth --rpc --rpccorsdomain localhost --cache=256 --datadir ")
 #
 # json rpc api functions. 
 # thranks to: https://github.com/BSDStudios/ethr
@@ -61,6 +63,7 @@ getNumber <- function(hex){
 getHex <-  function(number){
   return(paste0("0x",sprintf("%x",number)))
 }
+
 enrichETHblock <- function(hexBlock){
   
   blockReward <- 5
@@ -113,6 +116,7 @@ enrichETHblock <- function(hexBlock){
   return(block)
 }
 
+
 #
 # runner script
 # NOTE: when running the first time it takes a while. 
@@ -120,11 +124,11 @@ enrichETHblock <- function(hexBlock){
 # script start time
 start.time <- Sys.time()
 
-# create database handle 
-dbHandle <-odbcConnect("ethereum")
+# connect to database and retrieve latest block
+dbHandle = dbConnect(RSQLite::SQLite(), dbname="ethereum.db")
+maxBlockInDB <- dbGetQuery(dbHandle, "select number from eth_blocks order by number desc limit 1")
 
 # get the latest block in database 
-maxBlockInDB <- sqlQuery(dbHandle, "select top 1 number from eth_blocks order by number desc")
 maxBlockInDB <- as.numeric(maxBlockInDB)
 
 # when no block is found, assume that there are no block in the db yet
@@ -149,10 +153,10 @@ for (i in startBlock:stopBlock){
   
   # convert to database format and save in database.
   rBlock <- enrichETHblock(block)
-  RODBCext::sqlExecute(dbHandle, "INSERT INTO eth_blocks VALUES (?,?,?,?,?,?,?,?,?)", rBlock)
-  
-  # once every 500 blocks show status messuge 
-  if(i %% 500 == 1){
+  DBI::dbExecute(dbHandle, "INSERT INTO eth_blocks VALUES (?,?,?,?,?,?,?,?,?)", unname(as.list(rBlock) ))
+
+  # once every 500 blocks show status message 
+  if(i %% 10 == 1){
     end.time <- Sys.time()
     time.taken <- end.time - start.time
     print(paste0("Current block : ",i," Operation took:", as.numeric(time.taken)   ))
@@ -160,17 +164,41 @@ for (i in startBlock:stopBlock){
   }
 }
 # when done show status message again.
-print(paste0("Done! added: : ",stopBlock -maxBlockInDB," blocks" ))
+print(paste0("Done! added: : ",stopBlock - maxBlockInDB," blocks" ))
 
-# when done retrieve all blocks from the database
-allBlocks <- sqlQuery(dbHandle, "select * from eth_blocks order by number asc")
+
+#
+# Aggregation 
+#
+
+# get latest aggregated value
+# connect to database and retrieve latest block
+maxAggInDB <- dbGetQuery(dbHandle, "select day from eth_daily order by day desc limit 1")
+
+# when noting is found fetch from start
+if(nrow(maxAggInDB)==0)
+  maxAggInDB <- as.numeric(as.POSIXct('2015-07-28', tz = 'GMT'))
+
+
+# retrieve unaggregated blocks from database
+query <- paste0("select * from eth_blocks where timestamp >= '", maxAggInDB, "' order by number asc")
+notAggregatedBlocks <- dbGetQuery(dbHandle, query)
+
+
+notAggregatedBlocks$timestamp <- as.POSIXct(notAggregatedBlocks$timestamp, origin = '1970-01-01', tz = 'GMT')
+notAggregatedBlocks$difficulty <- as.numeric(notAggregatedBlocks$difficulty)
+
+# determine over how many days the blocks are spread and print
+days <- round(as.numeric(difftime(max(notAggregatedBlocks$timestamp), min(notAggregatedBlocks$timestamp), units = "days")),0)
+print(paste0("Got ",nrow(notAggregatedBlocks), " blocks spread over ",days, " days" ))
 
 # aggregate block data 
-dailyDifficulty <- allBlocks %>% 
+dailyDifficulty <- notAggregatedBlocks %>% 
   dplyr::mutate(toTimestamp = dplyr::lead(timestamp))   %>%
-  dplyr::mutate(duration = as.numeric(difftime(toTimestamp,timestamp, units = "secs")))   %>%
-  dplyr::mutate(weigthedDifficulty = difficulty*duration)   %>%
-  dplyr::group_by(Day = as.Date(format(as.Date(timestamp, "%d/%m/%Y")))) %>% 
+  dplyr::mutate(duration = as.numeric(difftime(toTimestamp,timestamp, units = "secs"))) %>%
+  dplyr::mutate(weigthedDifficulty = difficulty*duration)  %>%
+  filter(!is.na(toTimestamp)) %>%
+  dplyr::group_by(Day = as.Date(format(as.Date(timestamp, "%d/%m/%Y", tz=Sys.timezone())))) %>% 
   dplyr::summarise(netHash = sum(weigthedDifficulty)/sum(duration) / mean(duration), 
                    avgBlocktime = mean(duration),
                    ethFromBlocks = n()*5,
@@ -179,11 +207,29 @@ dailyDifficulty <- allBlocks %>%
                    ethFromtxFees = sum(txFees), 
                    ethTotal = sum(ethFromBlocks,ethFromUnclesForMiner,ethFromUnclesForIncluder,ethFromtxFees)) 
 
+
+# retrieve unaggregated blocks from database
+#dailyDifficulty$netHash <- as.integer64(dailyDifficulty$netHash)
+dailyDifficulty$Day <- as.numeric(as.POSIXct(dailyDifficulty$Day))
+
+# remove partial day 
+deleteQuery = paste0("DELETE FROM eth_daily WHERE day >= ",maxAggInDB,"")
+DBI::dbExecute(dbHandle, deleteQuery)
+# add new aggregations
+DBI::dbExecute(dbHandle, "INSERT INTO eth_daily VALUES (?,?,?,?,?,?,?,?)", unname(as.list(dailyDifficulty) ))
+# retrieve daily aggregations and write to file.
+query <- paste0("SELECT * FROM eth_daily ORDER BY day ASC")
+aggregatedBlocks <- dbGetQuery(dbHandle, query)
+aggregatedBlocks$day <- as.Date(aggregatedBlocks$day, origin='1970-01-01', tz='GMT')
+
 # RStudio filedir
 # write to dashboard dir
 dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
-saveRDS(dailyDifficulty, paste0(dir, "/dashboard/data/daily.Rda"))
+saveRDS(aggregatedBlocks, paste0(dir, "/dashboard/data/daily.Rda"))
+
 
 # clode db connection
-odbcCloseAll()
+dbDisconnect(dbHandle)
+
+
 
