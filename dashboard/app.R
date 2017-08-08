@@ -17,10 +17,10 @@ library(xts)
 bigbang <- as.Date("2015-07-30")
 
 # dev mode - RStudio
- dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
- ethDaily <- readRDS(paste0(dir,"/data/daily.Rda"))
-#ethDaily <- readRDS("data/daily.Rda")
- ethDaily$day <- as.Date(ethDaily$day)
+# dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
+# ethDaily <- readRDS(paste0(dir,"/data/daily.Rda"))
+ethDaily <- readRDS("data/daily.Rda")
+ethDaily$day <- as.Date(ethDaily$day)
 
 # shiny ui
 ui <- dashboardPage(
